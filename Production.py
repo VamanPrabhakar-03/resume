@@ -19,12 +19,19 @@ os.environ["PAFY_BACKEND"] = "internal"
 import pafy
 import plotly.express as px #to create visualisations at the admin session
 import nltk
+import json
+from pytube import YouTube
 nltk.download('stopwords')
 
 
 def fetch_yt_video(link):
-    video = pafy.new(link)
-    return video.title
+    try:
+        yt = YouTube(link)
+        return yt.title
+    except Exception as e:
+        print(f"Error fetching video: {e}")
+        return "Video title unavailable"
+
 
 def get_table_download_link(df,filename,text):
     """Generates a link allowing the data in a given panda dataframe to be downloaded
@@ -82,23 +89,26 @@ cursor = connection.cursor()
 
 def insert_data(name,email,res_score,timestamp,no_of_pages,reco_field,cand_level,skills,recommended_skills,courses):
     DB_table_name = 'user_data'
-    insert_sql = "insert into " + DB_table_name + """
-    values (0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
-    rec_values = (name, email, str(res_score), timestamp,str(no_of_pages), reco_field, cand_level, skills,recommended_skills,courses)
+    insert_sql = "INSERT INTO " + DB_table_name + """ 
+    (Name, Email_ID, resume_score, Timestamp, Page_no, Predicted_Field, User_level, Actual_skills, Recommended_skills, Recommended_courses)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+    rec_values = (name, email, str(res_score), timestamp, str(no_of_pages), reco_field, cand_level, skills,
+                  recommended_skills, courses)
     cursor.execute(insert_sql, rec_values)
     connection.commit()
 
 st.set_page_config(
-    page_title="AI Resume Analyzer",
+    page_title="AI-Powered Resume Analyzer",
     page_icon='./Logo/logo2.png',
 )
 def run():
-    img = Image.open('./Logo/logo2.png')
+    img = Image.open('./Logo/ResumeAi.png')
     # img = img.resize((250,250))
     st.image(img)
     st.title("AI Resume Analyser")
     st.sidebar.markdown("# Choose User")
-    activities = ["User", "Admin"]
+    activities = ["User","Admin"]
     choice = st.sidebar.selectbox("Choose among the given options:", activities)
     link = '[©Developed by Mr Vaman](https://www.linkedin.com/in/vaman-prabakar-32b6072a1/)'
     st.sidebar.markdown(link, unsafe_allow_html=True)
@@ -111,24 +121,25 @@ def run():
     # Create table
     DB_table_name = 'user_data'
     table_sql = "CREATE TABLE IF NOT EXISTS " + DB_table_name + """
-                    (ID INT NOT NULL AUTO_INCREMENT,
-                     Name varchar(500) NOT NULL,
-                     Email_ID VARCHAR(500) NOT NULL,
-                     resume_score VARCHAR(8) NOT NULL,
-                     Timestamp VARCHAR(50) NOT NULL,
-                     Page_no VARCHAR(5) NOT NULL,
-                     Predicted_Field BLOB NOT NULL,
-                     User_level BLOB NOT NULL,
-                     Actual_skills BLOB NOT NULL,
-                     Recommended_skills BLOB NOT NULL,
-                     Recommended_courses BLOB NOT NULL,
-                     PRIMARY KEY (ID));
-                    """
+        (ID INT NOT NULL AUTO_INCREMENT,
+         Name VARCHAR(500) NOT NULL,
+         Email_ID VARCHAR(500) NOT NULL,
+         resume_score VARCHAR(8) NOT NULL,
+         Timestamp VARCHAR(50) NOT NULL,
+         Page_no VARCHAR(5) NOT NULL,
+         Predicted_Field BLOB NOT NULL,
+         User_level BLOB NOT NULL,
+         Actual_skills BLOB NOT NULL,
+         Recommended_skills BLOB NOT NULL,
+         Recommended_courses BLOB NOT NULL,
+         PRIMARY KEY (ID));
+    """
     cursor.execute(table_sql)
+
     if choice == 'User':
         st.markdown('''<h5 style='text-align: left; color: #021659;'> Upload your resume, and get smart recommendations</h5>''',
                     unsafe_allow_html=True)
-        pdf_file = st.file_uploader("Choose your Resume", type=["pdf"])
+        pdf_file = st.file_uploader("Choose your Resume", type=["pdf", "docx"])
         if pdf_file is not None:
             with st.spinner('Uploading your Resume...'):
                 time.sleep(4)
@@ -301,10 +312,18 @@ def run():
                 st.warning("** Note: This score is calculated based on the content that you have in your Resume. **")
                 st.balloons()
 
-                insert_data(resume_data['name'], resume_data['email'], str(resume_score), timestamp,
-                            str(resume_data['no_of_pages']), reco_field, cand_level, str(resume_data['skills']),
-                            str(recommended_skills), str(rec_course))
-
+                insert_data(
+                    resume_data['name'],
+                    resume_data['email'],
+                    str(resume_score),
+                    timestamp,
+                    str(resume_data['no_of_pages']),
+                    json.dumps(reco_field),
+                    json.dumps(cand_level),
+                    json.dumps(resume_data['skills']),
+                    json.dumps(recommended_skills),
+                    json.dumps(rec_course)
+                )
 
                 ## Resume writing video
                 st.header("**Bonus Video for Resume Writing Tips💡**")
@@ -333,8 +352,8 @@ def run():
         ad_user = st.text_input("Username")
         ad_password = st.text_input("Password", type='password')
         if st.button('Login'):
-            if ad_user == 'briit' and ad_password == 'briit123':
-                st.success("Welcome Dr Briit !")
+            if ad_user == 'vaman' and ad_password == 'vaman123':
+                st.success("Welcome Vaman")
                 # Display Data
                 cursor.execute('''SELECT*FROM user_data''')
                 data = cursor.fetchall()
@@ -349,22 +368,48 @@ def run():
                 plot_data = pd.read_sql(query, connection)
 
                 ## Pie chart for predicted field recommendations
-                labels = plot_data.Predicted_Field.unique()
-                print(labels)
-                values = plot_data.Predicted_Field.value_counts()
-                print(values)
+
+                # Convert bytes to string in the entire column safely
+                plot_data['Predicted_Field'] = plot_data['Predicted_Field'].apply(
+                    lambda x: x.decode('utf-8') if isinstance(x, bytes) else str(x)
+                )
+
+                # Count occurrences
+                predicted_field_counts = plot_data['Predicted_Field'].value_counts()
+
+                # Build chart
                 st.subheader("**Pie-Chart for Predicted Field Recommendation**")
-                fig = px.pie(df, values=values, names=labels, title='Predicted Field according to the Skills')
+                fig = px.pie(
+                    names=predicted_field_counts.index.tolist(),
+                    values=predicted_field_counts.values.tolist(),
+                    title='Predicted Field according to the Skills'
+                )
                 st.plotly_chart(fig)
+                plot_data['User_level'] = plot_data['User_level'].apply(
+                    lambda x: x.decode('utf-8') if isinstance(x, bytes) else str(x)
+                )
 
                 ### Pie chart for User's👨‍💻 Experienced Level
-                labels = plot_data.User_level.unique()
-                values = plot_data.User_level.value_counts()
+                # Fix: decode User_level if needed
+                plot_data['User_level'] = plot_data['User_level'].apply(
+                lambda x: x.decode('utf-8') if isinstance(x, bytes) else str(x)
+                )
+
+                # Prepare values and labels
+                user_level_counts = plot_data['User_level'].value_counts()
+                labels = user_level_counts.index.tolist()
+                values = user_level_counts.values.tolist()
+
+                # Plot chart
                 st.subheader("**Pie-Chart for User's Experienced Level**")
-                fig = px.pie(df, values=values, names=labels, title="Pie-Chart📈 for User's👨‍💻 Experienced Level")
+                fig = px.pie(
+                names=labels,
+                values=values,
+                title="Pie-Chart📈 for User's👨‍💻 Experienced Level"
+                )
                 st.plotly_chart(fig)
-
-
             else:
                 st.error("Wrong ID & Password Provided")
+
+
 run()
