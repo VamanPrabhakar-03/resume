@@ -1,38 +1,30 @@
-import streamlit as st
+import base64
+import datetime
+import io
+import os
+import random
+import time
+import torch
 import pandas as pd
-import base64,random
-import time,datetime
-#libraries to parse the resume pdf files
-from pyresparser import ResumeParser
-from pdfminer3.layout import LAParams, LTTextBox
-from pdfminer3.pdfpage import PDFPage
-from pdfminer3.pdfinterp import PDFResourceManager
-from pdfminer3.pdfinterp import PDFPageInterpreter
-from pdfminer3.converter import TextConverter
-import io,random
-from streamlit_tags import st_tags
-from PIL import Image
 import pymysql
-from Courses import ds_course,web_course,android_course,ios_course,uiux_course,resume_videos,interview_videos
+import streamlit as st
+from PIL import Image
+from pdfminer3.converter import TextConverter
+from pdfminer3.layout import LAParams
+from pdfminer3.pdfinterp import PDFPageInterpreter
+from pdfminer3.pdfinterp import PDFResourceManager
+from pdfminer3.pdfpage import PDFPage
+# libraries to parse the resume pdf files
+from pyresparser import ResumeParser
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import os
+from streamlit_tags import st_tags
+from transformers import pipeline
 os.environ["PAFY_BACKEND"] = "internal"
-import pafy
-import plotly.express as px #to create visualisations at the admin session
 import nltk
 import json
 from pytube import YouTube
 nltk.download('stopwords')
-
-
-def fetch_yt_video(link):
-    try:
-        yt = YouTube(link)
-        return yt.title
-    except Exception as e:
-        print(f"Error fetching video: {e}")
-        return "Video title unavailable"
 
 
 def get_table_download_link(df,filename,text):
@@ -79,37 +71,34 @@ def show_pdf(file_path):
     pdf_display = F'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
     st.markdown(pdf_display, unsafe_allow_html=True)
 
-def course_recommender(course_list):
-    st.subheader("**Courses & Certificates Recommendations 🎓**")
-    c = 0
-    rec_course = []
-    no_of_reco = st.slider('Choose Number of Course Recommendations:', 1, 10, 5)
-    random.shuffle(course_list)
-    for c_name, c_link in course_list:
-        c += 1
-        st.markdown(f"({c}) [{c_name}]({c_link})")
-        rec_course.append(c_name)
-        if c == no_of_reco:
-            break
-    return rec_course
+
 
 #CONNECT TO DATABASE
 
 connection = pymysql.connect(host='localhost',user='root',password='Grizz*0304*',db='cv')
 cursor = connection.cursor()
 
-def insert_data(name, email, timestamp, no_of_pages, cand_level, skills, similarity_score):
-     insert_sql = ("INSERT INTO user_data (Name, Email_ID, Timestamp, Page_no, User_level, Actual_skills, Similarity_Score) "
-                   "VALUES (%s,%s,%s,%s,%s,%s,%s)")
-     rec_values = (name, email, timestamp, no_of_pages, cand_level, skills, similarity_score)
 
-     cursor.execute(insert_sql, rec_values)
-     connection.commit()
+def insert_data(name, email, timestamp, no_of_pages, cand_level, similarity_score, skills, rank):
+    insert_sql = """INSERT INTO user_data 
+    (Name, Email_ID, Timestamp, Page_no, User_level, Similarity_Score, Actual_skills,`Rank`)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+
+    rec_values = (name, email, timestamp, no_of_pages, cand_level, similarity_score, skills, rank)
+    cursor.execute(insert_sql, rec_values)
+    connection.commit()
+
+
 
 st.set_page_config(
     page_title="AI-Powered Resume Analyzer",
     page_icon='./Logo/logo2.png',
 )
+
+# Load summarizer once
+summarizer = pipeline("summarization", model="facebook/bart-base", tokenizer="facebook/bart-base")
+
+
 def run():
     img = Image.open('./Logo/ResumeAi.png')
     # img = img.resize((250,250))
@@ -121,7 +110,6 @@ def run():
     link = '[©Developed by Mr Vaman](https://www.linkedin.com/in/vaman-prabakar-32b6072a1/)'
     st.sidebar.markdown(link, unsafe_allow_html=True)
 
-
     # Create the DB
     db_sql = """CREATE DATABASE IF NOT EXISTS CV;"""
     cursor.execute(db_sql)
@@ -130,14 +118,14 @@ def run():
     DB_table_name = 'user_data'
     table_sql = "CREATE TABLE IF NOT EXISTS " + DB_table_name + """
         (ID INT NOT NULL AUTO_INCREMENT,
-         Name VARCHAR(500) NOT NULL,
-         Email_ID VARCHAR(500) NOT NULL,
-         Timestamp VARCHAR(50) NOT NULL,
-         Page_no VARCHAR(5) NOT NULL,
-         User_level BLOB NOT NULL,
-         Actual_skills BLOB NOT NULL,
-         Similarity_Score VARCHAR(10) NOT NULL,
-         PRIMARY KEY (ID));
+    Name VARCHAR(500) NOT NULL,
+    Email_ID VARCHAR(500) NOT NULL,
+    Timestamp VARCHAR(50) NOT NULL,
+    Page_no VARCHAR(5) NOT NULL,
+    User_level VARCHAR(500) NOT NULL,        -- FIXED: VARCHAR instead of BLOB
+    Actual_skills TEXT NOT NULL,             -- TEXT or VARCHAR depending on expected length
+    Similarity_Score VARCHAR(10) NOT NULL,
+    PRIMARY KEY (ID));
     """
     cursor.execute(table_sql)
 
@@ -156,6 +144,19 @@ def run():
             if resume_data:
                 ## Get the whole resume data
                 resume_text = pdf_reader(save_image_path)
+
+                resume_text = pdf_reader(save_image_path)
+
+                # Clean resume text (optional: remove extra whitespace)
+                clean_resume_text = " ".join(resume_text.split())
+
+                # Generate summary using BART
+                summary_output = summarizer(clean_resume_text, max_length=120, min_length=30, do_sample=False)
+                resume_summary = summary_output[0]['summary_text']
+
+                # Display summary to user
+                st.subheader("**Resume Summary (AI Generated):**")
+                st.success(resume_summary)
 
                 st.header("**Resume Analysis**")
                 st.success("Hello "+ resume_data['name'])
@@ -205,19 +206,29 @@ def run():
 
                 st.success(f"🧠 Similarity Score: {similarity_score * 100}%")
                 st.warning("** Note: This score is calculated based on the content that you have in your Resume. **")
+                # Example: Simple rank based on similarity score
+                if similarity_score >= 0.8:
+                    rank = 1  # Highly matching
+                elif similarity_score >= 0.5:
+                    rank = 2  # Medium match
+                else:
+                    rank = 3  # Low match
 
+
+
+                # Display Save Button
+            if st.button("Save My Resume Analysis"):
                 insert_data(
                     resume_data['name'],
                     resume_data['email'],
                     timestamp,
                     str(resume_data['no_of_pages']),
-                    json.dumps(cand_level),  # This is fine if it's a simple string
+                    json.dumps(cand_level),
                     str(similarity_score),
-                    json.dumps(resume_data['skills'], ensure_ascii=False)  # 🔥 human-readable
+                    json.dumps(resume_data['skills']),
+                    rank
                 )
-
-
-
+                st.success("✅ Your data has been successfully saved!")
 
     else:
         ## Admin Side
@@ -234,8 +245,9 @@ def run():
                 data = cursor.fetchall()
                 st.header("**User's Data**")
                 df = pd.DataFrame(data, columns=['ID', 'Name', 'Email', 'Timestamp', 'Total Page',
-                                                'User Level', 'Actual Skills','Similarity_Score'])
+                                                 'User Level', 'Actual Skills', 'Similarity_Score', 'Rank'])
                 st.dataframe(df)
+
                 st.markdown(get_table_download_link(df,'User_Data.csv','Download Report'), unsafe_allow_html=True)
                 ## Admin Side Data
                 query = 'select * from user_data;'
@@ -244,7 +256,6 @@ def run():
                     lambda x: json.loads(x.decode('utf-8')) if isinstance(x, bytes) else json.loads(x)
                 )
     
-                ## Pie chart for predicted field recommendations
 
 
 
