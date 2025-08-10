@@ -111,7 +111,7 @@ def show_pdf(file_path):
 
 #CONNECT TO DATABASE
 
-connection = pymysql.connect(host='localhost',user='root',password='Grizz*0304*',db='cv')
+connection = pymysql.connect(host='localhost',user='root',password='password',db='cv')
 cursor = connection.cursor()
 
 
@@ -346,3 +346,4 @@ def run():
 
 
 run()
+
